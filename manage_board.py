@@ -1,10 +1,10 @@
 import time
+from http import HTTPStatus
 
 from PyQt5.QtGui import *
 from PyQt5.QtWidgets import *
 from PyQt5.QtCore import *
 from PyQt5.QtCore import pyqtSlot
-
 import kibana_api
 
 
@@ -28,21 +28,13 @@ class ManageBoard(QMainWindow):
         self.userslist = QListWidget(self)
         self.roleslist = QListWidget(self)
 
-        self.users = kibana_api.get_users()
-        self.userslist.addItems(self.users)
-
-        self.roles = kibana_api.get_roles()
-
-        for index, user in enumerate(self.users):
-            if 'superuser' in user:
-                self.roles.insert(index, 'superuser')
-
-        self.roleslist.addItems(self.roles)
-
+        self.userslist.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.userslist.setContextMenuPolicy(Qt.CustomContextMenu)
         self.userslist.customContextMenuRequested.connect(self.list_context)
 
-        #------------------------- Creating Buttons --------------------------#
+        self.update_lists()
+
+        # ------------------------- Creating Buttons --------------------------#
 
         man_createBtn = QPushButton('Manually create user')
         man_createBtn.clicked.connect(self.on_click)
@@ -60,13 +52,13 @@ class ManageBoard(QMainWindow):
         layout.addWidget(self.userslist, 1, 0)
         layout.addWidget(self.roleslist, 1, 1)
         layout.addWidget(man_createBtn, 2, 0)
-        layout.addWidget(auto_createBtn, 2,1)
+        layout.addWidget(auto_createBtn, 2, 1)
 
         centralwidget.setLayout(layout)
 
         self.setCentralWidget(centralwidget)
 
-        #self.setGeometry(250,300,250,200)
+        # self.setGeometry(250,300,250,200)
         self.setWindowTitle('Elastic')
         self.show()
 
@@ -74,12 +66,19 @@ class ManageBoard(QMainWindow):
 
         menu = QMenu(self)
 
-        delAct = menu.addAction('Delete user')
+        delAct = menu.addAction('Delete user(s)')
 
         action = menu.exec_(self.mapToGlobal(pos))
 
         if action == delAct:
-            print("shit")
+            res = kibana_api.delete_users(self.userslist.selectedItems())
+
+            if res == 'OK':
+                QMessageBox().information(self, 'Success', 'User(s) deleted successfully', QMessageBox.Ok)
+                self.update_lists()
+
+            else:
+                QMessageBox().warning(self, 'Warning', res, QMessageBox.Ok)
 
     @pyqtSlot()
     def on_click(self):
@@ -91,7 +90,7 @@ class ManageBoard(QMainWindow):
 
         dialog = QDialog()
 
-        #--------------- Dialog Widgets ---------------#
+        # --------------- Dialog Widgets ---------------#
         userlabel = QLabel('Username:', dialog)
         userlabel.setAlignment(Qt.AlignHCenter)
 
@@ -115,30 +114,39 @@ class ManageBoard(QMainWindow):
         self.passeditconfirm.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.passeditconfirm.setToolTip('Case Sensitive')
 
+        normaluser = QRadioButton('Normal user')
+        normaluser.setChecked(True)
+        superuser = QRadioButton('Superuser')
+
+        normaluser.toggled.connect(lambda: superuser.setChecked(False))
+        superuser.toggled.connect(lambda: normaluser.setChecked(False))
+
         confBtn = QPushButton('Confirm', dialog)
         confBtn.clicked.connect(dialog.accept)
-        cancelBtn = QPushButton('Cancel', dialog)
 
-        #--------------- Dialog Layout ---------------#
+        cancelBtn = QPushButton('Cancel', dialog)
+        cancelBtn.clicked.connect(dialog.reject)
+
+        # --------------- Dialog Layout ---------------#
         hbox1 = QHBoxLayout()
         hbox1.addWidget(userlabel)
         hbox1.addWidget(self.useredit, 0, Qt.AlignHCenter)
-
 
         hbox2 = QHBoxLayout()
         hbox2.addWidget(passlabel)
         hbox2.addWidget(self.passedit, 0, Qt.AlignHCenter)
 
-
-
         hbox3 = QHBoxLayout()
         hbox3.addWidget(passlabelconfirm)
         hbox3.addWidget(self.passeditconfirm, 0, Qt.AlignHCenter)
 
-        hbox4 =QHBoxLayout()
-        hbox4.addWidget(confBtn)
-        hbox4.addWidget(cancelBtn)
+        hbox4 = QHBoxLayout()
+        hbox4.addWidget(normaluser)
+        hbox4.addWidget(superuser)
 
+        hbox5 = QHBoxLayout()
+        hbox5.addWidget(confBtn)
+        hbox5.addWidget(cancelBtn)
 
         vbox = QVBoxLayout()
         vbox.setAlignment(Qt.AlignCenter)
@@ -148,14 +156,57 @@ class ManageBoard(QMainWindow):
         vbox.addSpacerItem(QSpacerItem(10, 10))
         vbox.addLayout(hbox3)
         vbox.addLayout(hbox4)
+        vbox.addLayout(hbox5)
 
         dialog.setWindowTitle("Create user")
         dialog.setLayout(vbox)
         res = dialog.exec()
 
         if res == QDialog.Accepted:
+
+            res = kibana_api.validate(self.useredit.text(), self.passedit.text())
+
+            if res == "Bad username":
+                QMessageBox().critical(self, 'Error', 'Invalid username\nUsername\should not contain special '
+                                                      'characters([!@#$%^&*()+=<>.,?/"\';:|\\[]{}`~) or space or '
+                                                      'be blank',
+                                       QMessageBox.Ok)
+                return
+
+            if res == "Bad password":
+                QMessageBox().critical(self, 'Error', 'Invalid password\nPassword has to be >6 characters and cannot '
+                                                      'contain whitespace or be blank',
+                                       QMessageBox.Ok)
+                return
+
             if self.passedit.text() == self.passeditconfirm.text():
-                print("good")
+                role = 'normal' if normaluser.isChecked() else 'superuser'
+                print(role)
+                req = kibana_api.manage_user(self.useredit.text(), self.passedit.text(), role)
+                if req == 'OK':
+                    QMessageBox().information(self, 'Success', 'User created successfully', QMessageBox.Ok)
+                    self.update_lists()
+
+                else:
+                    QMessageBox().warning(self, 'Warning', req, QMessageBox.Ok)
+            else:
+                QMessageBox().warning(self, 'Warning', 'Passwords do not match', QMessageBox.Ok)
+
+    def update_lists(self):
+
+        users = kibana_api.get_users()
+        roles = kibana_api.get_roles()
+
+        self.userslist.clear()
+        self.roleslist.clear()
+
+        self.userslist.addItems(users)
+
+        for index, user in enumerate(users):
+            if 'superuser' in user:
+                roles.insert(index, 'superuser')
+
+        self.roleslist.addItems(roles)
 
     def keyPressEvent(self, e):
 

@@ -1,12 +1,13 @@
 import sys
-import kibana_api
-import yaml
 from http import HTTPStatus
 
-from PyQt5.QtGui import *
-from PyQt5.QtWidgets import *
+import yaml
 from PyQt5.QtCore import *
 from PyQt5.QtCore import pyqtSlot
+from PyQt5.QtGui import *
+from PyQt5.QtWidgets import *
+
+import kibana_api
 from manage_board import ManageBoard
 
 

@@ -1,10 +1,13 @@
+from http import HTTPStatus
+
 import requests
 import re
 import json
 from elasticsearch import Elasticsearch
 
-
 # Auth token
+from requests import Response
+
 auth = None
 
 # USER API
@@ -35,23 +38,23 @@ def authenticate(user, password, elasticip_addr):
     return req.status_code
 
 
-def create_user(user, password):
-    # CREATE USER
-    if password is None:
-        password = "qwerty"
-    body = '''{
-        "password" : "''' + password + '''",
-        "roles" : ["kibana_dashboard_only_user", "''' + user.upper() + '''_ROLE"]
-    }'''
-
-    print(user, password)
-    req = requests.post("http://" + elasticip + user_api + user, auth=auth, headers=headers, data=body)
-    if req.status_code == 200:
-        print("User: " + user + " created")
+# CREATE USER
+def create_user(user, password="qwerty", role="normal"):
+    if role == "normal":
+        body = '''{
+            "password" : "''' + password + '''",
+            "roles" : ["kibana_dashboard_only_user", "''' + user.upper() + '''_ROLE"]
+        }'''
     else:
-        print("Error creating user \"" + user + "\", Code: " + str(req.status_code) + ", " + req.reason)
+        body = '''{
+                    "password" : "''' + password + '''",
+                    "roles" : ["superuser"]
+                }'''
+    print(body)
 
-    return req.status_code
+    req = requests.post("http://" + elasticip + user_api + user, auth=auth, headers=headers, data=body)
+
+    return req
 
 
 def create_role(user):
@@ -71,12 +74,13 @@ def create_role(user):
 
     req = requests.post("http://" + elasticip + role_api + user.upper() + "_ROLE", auth=auth, headers=headers,
                         data=body)
+
     if req.status_code == 200:
         print("Role: " + user.upper() + "_ROLE " + "created")
     else:
         print("Error creating role for \"" + user + "\", Code: " + str(req.status_code) + ", " + req.reason)
 
-    return req.status_code
+    return req
 
 
 def validate(user, password):
@@ -86,37 +90,31 @@ def validate(user, password):
     if password == "" or re.search(' ', password) is not None or len(password) < 6:
         return "Bad password"
 
+    return "OK"
+
 
 def delete_users(users):
-    headers = {'Content-type': 'application/json'}
 
     for user in users:
 
         # Delete user
-        req = requests.delete("http://" + elasticip + user_api + user, auth=auth, headers=headers)
-        if req.status_code == 200:
-            print("User: " + user + " deleted")
-        else:
-            print("Error deleting user(" + user + "): " + str(req.status_code) + ", " + req.reason)
+        req = requests.delete("http://" + elasticip + user_api + user.text().replace("(superuser)", ""), auth=auth,
+                              headers=headers)
+
+        if req.status_code != HTTPStatus.OK.value:
+            return "Error deleting user \"" + user.text() + "\", Code: " + str(req.status_code) + ", " + req.reason
+
+        if "superuser" in user.text():
+            return "OK"
 
         # Delete role associated with this user
-        role = user.upper() + "_ROLE"
+        role = user.text().upper() + "_ROLE"
         req = requests.delete("http://" + elasticip + role_api + role, auth=auth, headers=headers)
-        if req.status_code == 200:
-            print("Role: " + role + " deleted")
-        else:
-            print("Error deleting role(" + role + "): " + str(req.status_code) + ", " + req.reason)
 
+        if req.status_code != HTTPStatus.OK.value:
+            return "Error deleting role \"" + role + "\", Code: " + str(req.status_code) + ", " + req.reason
 
-def delete_roles(roles):
-    for role in roles:
-
-        # Delete user
-        req = requests.delete("http://" + elasticip + role_api + role, auth=auth, headers=headers)
-        if req.status_code == 200:
-            print("Role: " + role + " deleted")
-        else:
-            print("Error deleting role(" + user + "): " + str(req.status_code) + ", " + req.reason)
+    return "OK"
 
 
 def get_users():
@@ -168,6 +166,10 @@ def get_devices():
     }
 
     response = es.search(index="logstash-*", body=query)
+
+    if response['took'] == 0:
+        return None
+
     for device in response['aggregations']['devices']['buckets']:
         newdev = ""
         for char in device['key']:
@@ -182,7 +184,7 @@ def get_devices():
     return sorted(devices)
 
 
-def manage_user(user, password):
+def manage_user(user=None, password=None, mode='normal'):
     devices = get_devices()
     users = get_users()
     roles = get_roles()
@@ -192,26 +194,37 @@ def manage_user(user, password):
         for device in devices:
             req = requests.get("http://" + elasticip + user_api + device.lower(), auth=auth, headers=headers)
 
-            if req.status_code == 404:
-                if create_user(device.lower(), password) == 200:  # All good, check role
+            if req.status_code == HTTPStatus.NOT_FOUND.value:  # User for device does not exist
+                res = create_user(device.lower())
+                if res.status_code == HTTPStatus.OK.value:  # All good, check role
                     if device + "_ROLE" not in roles:
-                        create_role(device.lower())
-                    else:
-                        return None
+                        res = create_role(device.lower())
+                        if res.status_code != HTTPStatus.OK.value:
+                            return "Error creating role for \"" + user + "\", Code: " + str(res.status_code) + ", " \
+                                   + res.reason
+
+                    return "OK"
+
+                else:
+                    return "Error creating user \"" + user + "\", Code: " + str(res.status_code) + ", " + res.reason
+
             else:
-                return req
+                return "User already exists"
 
     else:  # Create user manually
         # Check if user exists
-        req = requests.get("http://" + elasticip + user_api + user, auth=auth)
-        if req.status_code == 404:  # He doesn't exist, so create
-            if create_user(user, password) == 200:  # All good, check role
-                if user.upper() + "_ROLE" not in roles:
-                    create_role(user)
-                else:
-                    return None
-        elif req.status_code == 200:
-            print("User \"" + user + "\" already exists")
-            return None
+        if user not in users:  # He doesn't exist, so create
+            res = create_user(user, password, mode)
+            if res.status_code == HTTPStatus.OK.value:  # All good, check role
+                if user + "_ROLE" not in roles and mode == "normal":
+                    res = create_role(user)
+                    if res.status_code != HTTPStatus.OK.value:
+                        return "Error creating role for \"" + user + "\", Code: " + str(res.status_code) + ", " \
+                               + res.reason
+
+                return "OK"
+
+            else:
+                return "Error creating user \"" + user + "\", Code: " + str(res.status_code) + ", " + res.reason
         else:
-            return req
+            return "User already exists"
