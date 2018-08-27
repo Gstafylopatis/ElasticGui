@@ -29,8 +29,15 @@ class ManageBoard(QMainWindow):
         self.roleslist = QListWidget(self)
 
         self.userslist.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.userslist.setObjectName('users')
         self.userslist.setContextMenuPolicy(Qt.CustomContextMenu)
         self.userslist.customContextMenuRequested.connect(self.list_context)
+
+        self.roleslist.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.roleslist.setObjectName('roles')
+        self.roleslist.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.roleslist.customContextMenuRequested.connect(self.list_context)
+
 
         self.update_lists()
 
@@ -43,6 +50,9 @@ class ManageBoard(QMainWindow):
         auto_createBtn = QPushButton('Automatically create user')
         auto_createBtn.clicked.connect(self.on_click)
         auto_createBtn.setObjectName('Automatic')
+        auto_createBtn.setToolTip('Gets distinct device names from Elastic database'
+                                  ' and creates a user for each one with default'
+                                  ' password="qwerty"')
 
         # ------------------------ Creating Layout ---------------------------#
         layout = QGridLayout()
@@ -66,25 +76,46 @@ class ManageBoard(QMainWindow):
 
         menu = QMenu(self)
 
-        delAct = menu.addAction('Delete user(s)')
+        delAct = menu.addAction('Delete')
 
-        action = menu.exec_(self.mapToGlobal(pos))
+        action = menu.exec_(self.sender().mapToGlobal(pos))
 
         if action == delAct:
-            res = kibana_api.delete_users(self.userslist.selectedItems())
+            if self.sender().objectName() == 'users':
+                res = kibana_api.delete_users(self.userslist.selectedItems())
 
-            if res == 'OK':
-                QMessageBox().information(self, 'Success', 'User(s) deleted successfully', QMessageBox.Ok)
-                self.update_lists()
+                if res == 'OK':
+                    QMessageBox().information(self, 'Success', 'User(s) deleted successfully', QMessageBox.Ok)
+                    self.update_lists()
+
+                else:
+                    QMessageBox().warning(self, 'Warning', res, QMessageBox.Ok)
 
             else:
-                QMessageBox().warning(self, 'Warning', res, QMessageBox.Ok)
+                res = kibana_api.delete_roles(self.roleslist.selectedItems())
+
+                if res == 'OK':
+                    QMessageBox().information(self, 'Success', 'Role(s) deleted successfully', QMessageBox.Ok)
+                    self.update_lists()
+
+                else:
+                    QMessageBox().warning(self, 'Warning', res, QMessageBox.Ok)
 
     @pyqtSlot()
     def on_click(self):
 
         if self.sender().objectName() == 'Manual':
             self.show_dialog()
+        else:
+            req = kibana_api.manage_user()
+            if req == 'OK':
+                QMessageBox().information(self, 'Success', 'Users created '
+                                          'successfully', QMessageBox.Ok)
+                self.update_lists()
+
+            else:
+                QMessageBox().warning(self, 'Warning', req, QMessageBox.Ok)
+
 
     def show_dialog(self):
 

@@ -6,7 +6,7 @@ import json
 from elasticsearch import Elasticsearch
 
 # Auth token
-from requests import Response
+#from requests import Response
 
 auth = None
 
@@ -75,7 +75,7 @@ def create_role(user):
     req = requests.post("http://" + elasticip + role_api + user.upper() + "_ROLE", auth=auth, headers=headers,
                         data=body)
 
-    if req.status_code == 200:
+    if req.status_code == HTTPStatus.OK.value:
         print("Role: " + user.upper() + "_ROLE " + "created")
     else:
         print("Error creating role for \"" + user + "\", Code: " + str(req.status_code) + ", " + req.reason)
@@ -111,11 +111,25 @@ def delete_users(users):
         role = user.text().upper() + "_ROLE"
         req = requests.delete("http://" + elasticip + role_api + role, auth=auth, headers=headers)
 
-        if req.status_code != HTTPStatus.OK.value:
+        if req.status_code != HTTPStatus.OK.value and req.status_code != HTTPStatus.NOT_FOUND.value:
             return "Error deleting role \"" + role + "\", Code: " + str(req.status_code) + ", " + req.reason
 
     return "OK"
 
+def delete_roles(roles):
+
+    for role in roles:
+
+        if "superuser" in role.text():
+            return "Error : Cannot delete superuser role. Delete user instead"
+
+        # Delete role
+        req = requests.delete("http://" + elasticip + role_api + role.text(), auth=auth, headers=headers)
+
+        if req.status_code != HTTPStatus.OK.value:
+            return "Error deleting user \"" + user.text() + "\", Code: " + str(req.status_code) + ", " + req.reason
+
+    return "OK"
 
 def get_users():
     users = []
